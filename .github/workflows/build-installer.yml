@@ -1,0 +1,84 @@
+name: build-installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "PhoneBox release tag to package (leave empty for the latest release)"
+        required: false
+        default: ""
+  push:
+    branches: [main]
+    paths:
+      - "installer/**"
+      - ".github/workflows/build-installer.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      UPSTREAM: ersinkoc/phonebox
+      TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the PhoneBox release (phone APK and Windows agent)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force stage\dl | Out-Null
+          $a = @('release', 'download')
+          if ($env:TAG) { $a += $env:TAG }
+          $a += @('--repo', $env:UPSTREAM, '--dir', 'stage\dl', '--clobber',
+                  '--pattern', 'PhoneBox-*.apk',
+                  '--pattern', 'PhoneBoxAgent-*-win-x64.zip')
+          gh @a
+          if ($LASTEXITCODE -ne 0) { throw 'gh release download failed' }
+          Get-ChildItem stage\dl | Format-Table Name, Length
+
+      - name: Stage the files
+        shell: pwsh
+        run: |
+          $apk = Get-ChildItem stage\dl -Filter 'PhoneBox-*.apk' | Select-Object -First 1
+          $zip = Get-ChildItem stage\dl -Filter 'PhoneBoxAgent-*-win-x64.zip' | Select-Object -First 1
+          if (-not $apk -or -not $zip) { throw 'The release does not contain the expected APK and win-x64 agent zip.' }
+          $ver = [regex]::Match($apk.Name, '^PhoneBox-(.+)\.apk$').Groups[1].Value
+          Expand-Archive $zip.FullName -DestinationPath stage\agent -Force
+          Copy-Item $apk.FullName stage\PhoneBox.apk
+          if (-not (Test-Path stage\agent\PhoneBoxAgent.exe)) { throw 'PhoneBoxAgent.exe was not found in the agent zip.' }
+          "VERSION=$ver" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          Write-Host "Packaging PhoneBox $ver"
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc "/DVersion=$env:VERSION" installer\PhoneBox.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup failed' }
+          $exe = "output\PhoneBox-Setup-$env:VERSION.exe"
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  PhoneBox-Setup-$env:VERSION.exe" | Out-File -Encoding ascii "$exe.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PhoneBox-Setup
+          path: output/*
+
+      - name: Publish to this repository's Releases
+        shell: pwsh
+        run: |
+          $rel = "installer-$env:VERSION"
+          $exe = "output\PhoneBox-Setup-$env:VERSION.exe"
+          gh release view $rel *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $rel $exe "$exe.sha256" --clobber
+          } else {
+            gh release create $rel $exe "$exe.sha256" --title "PhoneBox installer $env:VERSION" --notes "Windows installer that bundles the PhoneBox agent and the phone APK from $env:UPSTREAM release $env:VERSION."
+          }
