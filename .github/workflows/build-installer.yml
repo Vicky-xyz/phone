@@ -59,13 +59,20 @@ jobs:
       - name: Build the installer
         shell: pwsh
         run: |
+          Write-Host "Workspace: $PWD"
+          Get-ChildItem -Recurse installer | Select-Object FullName
+          Get-ChildItem stage\agent | Select-Object -First 15 Name
+          $iss = Join-Path $PWD 'installer\PhoneBox.iss'
+          if (-not (Test-Path $iss)) { throw 'installer\PhoneBox.iss is missing from the repo. Upload the whole installer folder.' }
+          New-Item -ItemType Directory -Force output | Out-Null
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          & $iscc "/DVersion=$env:VERSION" installer\PhoneBox.iss
+          if (-not (Test-Path $iscc)) { throw "ISCC.exe not found at $iscc" }
+          & $iscc "/DVersion=$env:VERSION" $iss
           if ($LASTEXITCODE -ne 0) { throw 'Inno Setup failed' }
           $exe = "output\PhoneBox-Setup-$env:VERSION.exe"
           $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
           "$hash  PhoneBox-Setup-$env:VERSION.exe" | Out-File -Encoding ascii "$exe.sha256"
-
+    
       - uses: actions/upload-artifact@v4
         with:
           name: PhoneBox-Setup
