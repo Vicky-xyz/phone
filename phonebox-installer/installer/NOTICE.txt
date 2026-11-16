@@ -1,6 +1,0 @@
-This installer bundles the PhoneBox agent and the PhoneBox Android app,
-which are made by ersinkoc and released under the MIT license:
-https://github.com/ersinkoc/phonebox
-
-The installer only repackages the official release files. It is not signed,
-so Windows SmartScreen may ask you to confirm before running it.
